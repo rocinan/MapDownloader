@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"code.cloudfoundry.org/bytefmt"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/robertkrimen/otto"
 )
@@ -39,16 +38,23 @@ type MapInfo struct {
 }
 
 type DownLoader struct {
-	db         *sql.DB
-	jsVM       *otto.Otto
-	mapInfo    MapInfo
-	provider   map[int]string
-	netClient  *http.Client
+	db        *sql.DB
+	jobs      []Tile
+	jsVM      *otto.Otto
+	mapInfo   MapInfo
+	provider  map[int]string
+	netClient *http.Client
+
+	capPipe   int
+	capQueue  int
+	maxWorker int
+
+	errTiles   int
 	doneTiles  int
 	totalTiles int
 }
 
-func NewDownLoader(info MapInfo) *DownLoader {
+func NewDownLoader(info MapInfo, capPipe, capQueue, maxWorker int) *DownLoader {
 	vm := otto.New()
 	vm.Run(config.CoordTransformLib)
 
@@ -59,13 +65,15 @@ func NewDownLoader(info MapInfo) *DownLoader {
 	client.Timeout = time.Duration(20) * time.Second
 
 	return &DownLoader{
-		jsVM:      vm,
-		mapInfo:   info,
-		netClient: client,
+		jobs:       make([]Tile, 0),
+		jsVM:       vm,
+		mapInfo:    info,
+		netClient:  client,
+		totalTiles: 0,
 	}
 }
 
-func (dl *DownLoader) Start() {
+func (dl *DownLoader) GetTaskInfo() int {
 	jobs := make([]Tile, 0)
 	if dl.mapInfo.Type == 1 {
 		jobs = append(jobs, dl.getTilesList(1)...)
@@ -73,8 +81,19 @@ func (dl *DownLoader) Start() {
 	} else {
 		jobs = dl.getTilesList(1)
 	}
+	dl.jobs = jobs
 	dl.totalTiles = len(jobs)
-	fmt.Println("任务数: ", dl.totalTiles, "预计大小: ", bytefmt.ByteSize(uint64(dl.totalTiles*1024*15)))
+	return dl.totalTiles
+}
+
+func (dl *DownLoader) GetDownPercent() float64 {
+	return float64(dl.doneTiles+dl.errTiles) / float64(dl.totalTiles)
+}
+
+func (dl *DownLoader) Start() bool {
+	if dl.totalTiles == 0 {
+		return false
+	}
 	if dl.mapInfo.Language == "zh_CN" {
 		dl.provider = config.PROVIDER_CN
 	} else {
@@ -83,15 +102,15 @@ func (dl *DownLoader) Start() {
 	dl.initDB()
 	dl.cleanDB()
 
-	tilesPipe := make(chan Tile, 4096)
+	tilesPipe := make(chan Tile, dl.capPipe)
 	done := make(chan bool)
 
-	pool := pool.NewDispatcher(500, 2048)
+	pool := pool.NewDispatcher(dl.maxWorker, dl.capQueue)
 	pool.Run()
 
 	go dl.saveTiles(tilesPipe, done)
 
-	for _, v := range jobs {
+	for _, v := range dl.jobs {
 		job := func() {
 			var err error
 			url := strings.Replace(dl.provider[v.TilesType], "{x}", v.TilesRow, 1)
@@ -99,7 +118,7 @@ func (dl *DownLoader) Start() {
 			url = strings.Replace(url, "{z}", v.TilesLevel, 1)
 			if v.TilesBinary, err = dl.getTileBinary(url); err != nil {
 				fmt.Println("download tile err", err)
-				dl.totalTiles -= 1
+				dl.errTiles++
 			} else {
 				tilesPipe <- v
 			}
@@ -109,7 +128,7 @@ func (dl *DownLoader) Start() {
 	<-done
 	dl.db.Exec(config.CreateIndex)
 	dl.db.Close()
-	fmt.Println("下载完毕")
+	return true
 }
 
 func (dl *DownLoader) saveTiles(pipe chan Tile, done chan bool) {
@@ -123,10 +142,9 @@ func (dl *DownLoader) saveTiles(pipe chan Tile, done chan bool) {
 				fmt.Println("saveTile err", err)
 			} else {
 				dl.doneTiles++
-				fmt.Println(dl.doneTiles, dl.totalTiles, dl.doneTiles/dl.totalTiles*100, "%")
 			}
 		default:
-			if dl.doneTiles == dl.totalTiles && dl.doneTiles != 0 {
+			if (dl.doneTiles+dl.errTiles) == dl.totalTiles && dl.doneTiles != 0 {
 				fmt.Println("download success")
 				done <- true
 				return
