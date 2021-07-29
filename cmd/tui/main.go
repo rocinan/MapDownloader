@@ -74,7 +74,7 @@ func (m *model) startDownload() {
 	dl := downloader.NewDownLoader(downloader.MapInfo{
 		Type:     1,
 		MinZ:     13,
-		MaxZ:     14,
+		MaxZ:     16,
 		DbPath:   "./mapTiles.db",
 		MinLng:   "115.962982",
 		MaxLng:   "116.821289",
@@ -90,7 +90,7 @@ func (m *model) startDownload() {
 		time.Sleep(time.Millisecond * 500)
 		m.percent = dl.GetDownPercent()
 		if m.percent >= float64(1) {
-			fmt.Println("done!")
+			m.step = 4
 			return
 		}
 	}
@@ -108,7 +108,9 @@ func (m *model) View() (str string) {
 			"Tiles Count: " + strconv.Itoa(m.tilesCount) + "\n\n" +
 			"Start Download ..." + "\n\n"
 	case 3:
-		str += m.progress.View(m.percent)
+		str += m.progress.View(m.percent) + "\n\n"
+	case 4:
+		str += "download successful" + "\n\n"
 	default:
 		return fmt.Sprintf("err")
 	}

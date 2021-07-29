@@ -70,6 +70,9 @@ func NewDownLoader(info MapInfo, capPipe, capQueue, maxWorker int) *DownLoader {
 		mapInfo:    info,
 		netClient:  client,
 		totalTiles: 0,
+		capPipe:    capPipe,
+		capQueue:   capQueue,
+		maxWorker:  maxWorker,
 	}
 }
 
@@ -145,7 +148,6 @@ func (dl *DownLoader) saveTiles(pipe chan Tile, done chan bool) {
 			}
 		default:
 			if (dl.doneTiles+dl.errTiles) == dl.totalTiles && dl.doneTiles != 0 {
-				fmt.Println("download success")
 				done <- true
 				return
 			}
