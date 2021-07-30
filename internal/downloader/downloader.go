@@ -26,15 +26,15 @@ type Tile struct {
 }
 
 type MapInfo struct {
-	Type     int
-	MinZ     int
-	MaxZ     int
+	Type     int `json:"type"`
+	MinZ     int `json:"minZ"`
+	MaxZ     int `json:"maxZ"`
 	DbPath   string
-	MinLng   string
-	MaxLng   string
-	MinLat   string
-	MaxLat   string
-	Language string
+	MinLng   string `json:"minLng"`
+	MaxLng   string `json:"maxLng"`
+	MinLat   string `json:"minLat"`
+	MaxLat   string `json:"maxLat"`
+	Language string `json:"lang"`
 }
 
 type DownLoader struct {
@@ -89,8 +89,8 @@ func (dl *DownLoader) GetTaskInfo() int {
 	return dl.totalTiles
 }
 
-func (dl *DownLoader) GetDownPercent() float64 {
-	return float64(dl.doneTiles+dl.errTiles) / float64(dl.totalTiles)
+func (dl *DownLoader) GetDownPercent() (float64, int, int) {
+	return float64(dl.doneTiles+dl.errTiles) / float64(dl.totalTiles), dl.doneTiles, dl.errTiles
 }
 
 func (dl *DownLoader) Start() bool {
@@ -129,6 +129,7 @@ func (dl *DownLoader) Start() bool {
 		pool.JobQueue <- job
 	}
 	<-done
+	dl.setTask()
 	dl.db.Exec(config.CreateIndex)
 	dl.db.Close()
 	return true
@@ -174,6 +175,12 @@ func (dl *DownLoader) cleanDB() {
 	_, err = dl.db.Exec("delete from sqlite_sequence where name = 'map'")
 	_, err = dl.db.Exec("delete from sqlite_sequence")
 	_, err = dl.db.Exec("VACUUM")
+}
+
+func (dl *DownLoader) setTask() {
+	date := time.Now().Format("2006-01-02 15:04:05")
+	stmt, _ := dl.db.Prepare("INSERT INTO task(id,type,count,version,language,date,maxLevel,minLevel) values(?,?,?,?,?,?,?,?);")
+	stmt.Exec(1, dl.mapInfo.Type, dl.totalTiles-dl.errTiles, config.VERSION, dl.mapInfo.Language, date, dl.mapInfo.MaxZ, dl.mapInfo.MinZ)
 }
 
 func (dl *DownLoader) getTilesList(mapType int) []Tile {

@@ -1,8 +1,11 @@
 package main
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"log"
+	"mapdownloader/config"
 	"mapdownloader/internal/downloader"
 	"reflect"
 	"strconv"
@@ -10,6 +13,7 @@ import (
 
 	"code.cloudfoundry.org/bytefmt"
 	"github.com/charmbracelet/bubbles/progress"
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -23,94 +27,122 @@ func main() {
 }
 
 type model struct {
-	step          int
-	percent       float64
+	err           string
+	state         int
+	tilesErr      int
+	tilesDone     int
 	tilesCount    int
+	percent       float64
+	spinner       spinner.Model
 	progress      *progress.Model
 	textInput     textinput.Model
+	downloader    *downloader.DownLoader
 	helpTextStyle func(str string) string
 }
 
 func (m *model) Init() tea.Cmd {
 	ti := textinput.NewModel()
-	ti.Placeholder = "eyJ0eXBlIjoiMCIsIm..."
 	ti.Focus()
-	ti.CharLimit = 500
 	ti.Width = 180
+	ti.Placeholder = "eyJ0eXBlIjoiMCIsIm..."
 
-	prog, _ := progress.NewModel(progress.WithScaledGradient("#FF7CCB", "#FDFF8C"))
+	s := spinner.NewModel()
+	s.Spinner = spinner.Dot
+	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
 
-	m.textInput = ti
-	m.progress = prog
+	m.state = 1
 	m.percent = 0.0
+	m.spinner = s
+	m.textInput = ti
+	m.progress, _ = progress.NewModel(progress.WithScaledGradient("#FF7CCB", "#FDFF8C"))
 	m.helpTextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#626262")).Render
-	m.step = 0
 
-	return tickCmd()
+	//return tickCmd()
+	return spinner.Tick
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
 	if reflect.TypeOf(msg).String() == "tea.KeyMsg" {
 		mg := msg.(tea.KeyMsg)
 		if mg.Type == tea.KeyCtrlC || mg.Type == tea.KeyEsc {
 			return m, tea.Quit
 		} else if mg.Type == tea.KeyEnter {
-			m.step = 1
-			go m.startDownload()
+			switch m.state {
+			case 1:
+				m.state = 1
+				m.preDownload()
+			case 2:
+				m.state = 1
+			case 3:
+				m.state = 4
+				go m.runDownload()
+			case 5:
+				return m, tea.Quit
+			default:
+				return m, nil
+			}
 			return m, nil
 		} else {
 			text, cmd := m.textInput.Update(msg)
 			m.textInput = text
 			return m, cmd
 		}
-	} else if reflect.TypeOf(msg).String() == "time.Time" {
-		return m, tickCmd()
 	}
-	return m, nil
+	m.spinner, cmd = m.spinner.Update(msg)
+	return m, cmd
 }
 
-func (m *model) startDownload() {
-	m.step = 2
-	dl := downloader.NewDownLoader(downloader.MapInfo{
-		Type:     1,
-		MinZ:     13,
-		MaxZ:     16,
-		DbPath:   "./mapTiles.db",
-		MinLng:   "115.962982",
-		MaxLng:   "116.821289",
-		MinLat:   "40.22034",
-		MaxLat:   "39.692037",
-		Language: "zh_CN",
-	}, 4096, 4096, 512)
-	m.tilesCount = dl.GetTaskInfo()
-	time.Sleep(time.Second * 3)
-	m.step = 3
-	go dl.Start()
+func (m *model) preDownload() {
+	if mi, err := base64.StdEncoding.DecodeString(m.textInput.Value()); err != nil {
+		m.err = "Configuration analysis failed ( base64 )"
+		m.state = 2
+		return
+	} else {
+		mapInfo := downloader.MapInfo{}
+		if err := json.Unmarshal(mi, &mapInfo); err != nil {
+			m.err = "Configuration analysis failed ( json unmarshal )"
+			m.state = 2
+			return
+		} else {
+			mapInfo.DbPath = "./mapTiles.db"
+			m.downloader = downloader.NewDownLoader(mapInfo, 4096, 4096, 512)
+			m.tilesCount = m.downloader.GetTaskInfo()
+			m.state = 3
+		}
+	}
+}
+
+func (m *model) runDownload() {
+	go m.downloader.Start()
 	for {
 		time.Sleep(time.Millisecond * 500)
-		m.percent = dl.GetDownPercent()
+		m.percent, m.tilesDone, m.tilesErr = m.downloader.GetDownPercent()
 		if m.percent >= float64(1) {
-			m.step = 4
+			m.state = 5
 			return
 		}
 	}
 }
 
 func (m *model) View() (str string) {
-	str = "Enter the configuration string from the website <map.lizhengtech.com> \n\n"
-	switch m.step {
-	case 0:
-		str += m.textInput.View() + "\n\n"
+	str = "MapDownloader " + config.VERSION + "\n\n"
+	switch m.state {
 	case 1:
-		str += "process..."
+		str += "Enter the configuration string from the website <map.lizhengtech.com> \n\n" +
+			m.textInput.View() + "\n\n"
 	case 2:
-		str += " Guage Size: " + bytefmt.ByteSize(uint64(m.tilesCount*1024*15)) + "\n\n" +
-			"Tiles Count: " + strconv.Itoa(m.tilesCount) + "\n\n" +
-			"Start Download ..." + "\n\n"
+		str += "err: " + m.err + "\n\n"
 	case 3:
-		str += m.progress.View(m.percent) + "\n\n"
+		str += " Guage Size: " + bytefmt.ByteSize(uint64(m.tilesCount*1024*15)) + "\n" +
+			"Tiles Count: " + strconv.Itoa(m.tilesCount) + "\n\n" +
+			"Press Enter Start Download ..." + "\n\n"
 	case 4:
-		str += "download successful" + "\n\n"
+		str += m.spinner.View() + " Processing...   " +
+			fmt.Sprintf("total: %d   done: %d  timeout: %d", m.tilesCount, m.tilesDone, m.tilesErr) +
+			"\n\n" + m.progress.View(m.percent) + "\n\n"
+	case 5:
+		str += "download successful \n\n upload : oss cp /root/mapTools/mapTiles.db oss://lz-map/ \n\n   url: https://lz-map.oss-cn-shenzhen.aliyuncs.com/mapTiles.db \n\n"
 	default:
 		return fmt.Sprintf("err")
 	}
