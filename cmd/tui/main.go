@@ -55,6 +55,7 @@ func (m *model) Init() tea.Cmd {
 	m.spinner = s
 	m.textInput = ti
 	m.progress, _ = progress.NewModel(progress.WithScaledGradient("#FF7CCB", "#FDFF8C"))
+	m.progress.Width = 70
 	m.helpTextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#626262")).Render
 
 	//return tickCmd()
