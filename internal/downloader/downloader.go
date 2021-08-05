@@ -78,11 +78,13 @@ func NewDownLoader(info MapInfo, capPipe, capQueue, maxWorker int) *DownLoader {
 
 func (dl *DownLoader) GetTaskInfo() int {
 	jobs := make([]Tile, 0)
-	if dl.mapInfo.Type == 1 {
+	if dl.mapInfo.Type == 0 {
+		jobs = dl.getTilesList(0)
+	} else if dl.mapInfo.Type == 1 {
 		jobs = append(jobs, dl.getTilesList(1)...)
 		jobs = append(jobs, dl.getTilesList(2)...)
 	} else {
-		jobs = dl.getTilesList(1)
+		jobs = dl.getTilesList(0)
 	}
 	dl.jobs = jobs
 	dl.totalTiles = len(jobs)
@@ -112,18 +114,18 @@ func (dl *DownLoader) Start() bool {
 	pool.Run()
 
 	go dl.saveTiles(tilesPipe, done)
-
 	for _, v := range dl.jobs {
+		tile := v
 		job := func() {
 			var err error
-			url := strings.Replace(dl.provider[v.TilesType], "{x}", v.TilesRow, 1)
-			url = strings.Replace(url, "{y}", v.TilesCol, 1)
-			url = strings.Replace(url, "{z}", v.TilesLevel, 1)
-			if v.TilesBinary, err = dl.getTileBinary(url); err != nil {
+			url := strings.Replace(dl.provider[tile.TilesType], "{x}", tile.TilesRow, 1)
+			url = strings.Replace(url, "{y}", tile.TilesCol, 1)
+			url = strings.Replace(url, "{z}", tile.TilesLevel, 1)
+			if tile.TilesBinary, err = dl.getTileBinary(url); err != nil {
 				fmt.Println("download tile err", err)
 				dl.errTiles++
 			} else {
-				tilesPipe <- v
+				tilesPipe <- tile
 			}
 		}
 		pool.JobQueue <- job
@@ -166,15 +168,20 @@ func (dl *DownLoader) initDB() {
 }
 
 func (dl *DownLoader) cleanDB() {
-	_, err := dl.db.Exec("DELETE FROM map")
-	_, err = dl.db.Exec("DELETE FROM task")
-	if err != nil {
-		fmt.Println("清理发生错误", err)
+	var err error
+	clean := func(query string) {
+		if err != nil {
+			fmt.Println("clean err")
+			return
+		}
+		_, err = dl.db.Exec(query)
 	}
-	_, err = dl.db.Exec("update sqlite_sequence set seq = 0 where name = 'map'")
-	_, err = dl.db.Exec("delete from sqlite_sequence where name = 'map'")
-	_, err = dl.db.Exec("delete from sqlite_sequence")
-	_, err = dl.db.Exec("VACUUM")
+	clean("DELETE FROM map")
+	clean("DELETE FROM task")
+	clean("update sqlite_sequence set seq = 0 where name = 'map'")
+	clean("delete from sqlite_sequence where name = 'map'")
+	clean("delete from sqlite_sequence")
+	clean("VACUUM")
 }
 
 func (dl *DownLoader) setTask() {
@@ -215,6 +222,9 @@ func (dl *DownLoader) getTilesCoordinate(lng, lat string, z int) (x, y int) {
 
 func (dl *DownLoader) getTileBinary(url string) ([]byte, error) {
 	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
 	req.Header.Add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9")
 	req.Header.Add("Accept-Encoding", "gzip, deflate")
 	req.Header.Add("Accept-Language", "zh,en-US;q=0.9,en;q=0.8,zh-CN;q=0.7")
