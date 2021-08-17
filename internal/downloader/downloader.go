@@ -99,7 +99,7 @@ func (dl *DownLoader) Start() bool {
 	if dl.totalTiles == 0 {
 		return false
 	}
-	if dl.mapInfo.Language == "zh_CN" {
+	if dl.mapInfo.Language == "zh" {
 		dl.provider = config.PROVIDER_CN
 	} else {
 		dl.provider = config.PROVIDER_EN
